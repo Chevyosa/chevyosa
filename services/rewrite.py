@@ -28,7 +28,9 @@ REWRITE_SYSTEM = (
     "riwayat percakapan. Hilangkan kata ganti rujukan seperti "
     "'dia', 'itu', 'yang tadi', 'ini' — ganti dengan subjek aslinya. "
     "Jika pesan sudah jelas tanpa konteks, kembalikan apa adanya. "
-    "Balas HANYA dengan query yang sudah ditulis ulang, tanpa penjelasan."
+    "Pertahankan bahasa asli query (jangan ubah bahasa Inggris ke Indonesia "
+    "atau sebaliknya). Balas HANYA dengan query yang sudah ditulis ulang, "
+    "tanpa penjelasan."
 )
 
 

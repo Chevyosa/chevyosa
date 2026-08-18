@@ -27,7 +27,7 @@ class DummyRequest:
 async def test_confession_lifecycle():
     """Test submit, list, reply, and delete confession."""
     # 1. Submit confession
-    payload = ConfessionSubmitRequest(message="Halo Elara, ini pesan anonim pengujian.")
+    payload = ConfessionSubmitRequest(message="Halo Chevyosa, ini pesan anonim pengujian.")
     res = await submit_confession(payload, DummyRequest())
     assert res["status"] == "success"
     cid = res["id"]

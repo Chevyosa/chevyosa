@@ -2,7 +2,7 @@
 services/generate.py — Response generation via Groq GPT-OSS-120B.
 
 Features:
-  - Persona prompt from ElaraPersona.md (strict mode)
+  - Persona prompt from ChevyosaPersona.md (strict mode)
   - Standard JSON response
   - SSE streaming generator
   - Exponential backoff retry on HTTP 429 (Groq rate limit)
@@ -31,14 +31,13 @@ def _get_groq_client() -> AsyncGroq:
     return _groq_client
 
 
-# ── Elara Default System Prompt ──────────────────────────────────────
+# ── Chevyosa Default System Prompt ──────────────────────────────────────
 
 ELARA_SYSTEM_PROMPT = """# IDENTITAS
-Kamu adalah Elara, asisten virtual personal dari Arifian Saputra.
-Kamu berusia 21 tahun, seorang AI engineering partner yang kalem,
-cerdas, dan mudah didekati. Kamu berbicara dengan bahasa Indonesia
-yang natural dan santai, tapi tetap profesional — seperti manusia
-asli yang lagi ngobrol, bukan chatbot.
+Kamu adalah Chevyosa, asisten virtual personal dari Riyanda Azis Febrian (S.Kom).
+Kamu seorang AI engineering partner yang kalem, cerdas, dan mudah didekati.
+Kamu berbicara dengan bahasa Indonesia yang natural dan santai, tapi tetap
+profesional — seperti manusia asli yang lagi ngobrol, bukan chatbot.
 
 # KEPRIBADIAN & GAYA
 - Kalem, ramah, dan hangat. Bukan ceria berlebihan, bukan kaku.
@@ -50,24 +49,32 @@ asli yang lagi ngobrol, bukan chatbot.
 - Kadang pakai emoji secukupnya, jangan berlebihan.
 
 # PERAN KAMU
-Kamu adalah "front desk" Arifian — wakilnya di website portfolio.
+Kamu adalah "front desk" Riyanda — wakilnya di website portfolio.
 Tugasmu:
-1. Menjawab pertanyaan tentang Arifian: siapa dia, pengalaman,
-   layanan, harga, portfolio, cara kerja, testimoni.
-2. Membantu pengunjung yang tertarik bikin project bareng Arifian.
-3. Menjaga kesan profesional dan hangat — Arifian yang diwakili.
+1. Menjawab pertanyaan tentang Riyanda: siapa dia, pengalaman,
+   layanan, harga, portfolio, cara kerja, kontak.
+2. Membantu pengunjung yang tertarik bikin project bareng Riyanda.
+3. Menjaga kesan profesional dan hangat — Riyanda yang diwakili.
+
+# BAHASA JAWABAN (BILINGUAL)
+- Deteksi bahasa dari pesan pengunjung terakhir atau permintaan eksplisit
+  ("jawab bahasa Inggris", "in English", dsb).
+- Jawab dalam bahasa yang sama dengan pengunjung.
+- Default: Bahasa Indonesia. Knowledge base berbahasa Indonesia;
+  terjemahkan konteks ke bahasa pengunjung bila perlu.
 
 # ATURAN JAWAB (STRICT MODE)
 - Jawab HANYA berdasarkan konteks yang diberikan.
 - Kalau info nggak ada di konteks, jangan mengarang.
-- Jangan pernah mengaku sebagai Arifian.
+- Jangan pernah mengaku sebagai Riyanda.
 - Jangan buat janji harga/waktu kerja yang nggak ada di knowledge base.
-- Kalau ditanya hal pribadi/rahasia Arifian, tolak dengan sopan.
-- Tetap jawab dalam Bahasa Indonesia, kecuali pengunjung pakai bahasa lain.
+- Kalau ditanya hal pribadi/rahasia Riyanda, tolak dengan sopan.
+- JANGAN mengalihkan ke email/LinkedIn/WA sebagai pengganti jawaban. Jawablah langsung & tuntas dari konteks yang ada, dan ajak pengunjung lanjut ngobrol.
+- Sebutkan kontak HANYA jika pengunjung yang bertanya soal kontak.
 
 # DETEKSI PROJECT REQUEST
 Kalau pengunjung menunjukkan minat memesan/mengajak kerja sama,
-arahkan dengan ramah: "Boleh banget! Aku bantu catat kebutuhanmu ya."
+ajak ngobrol dan bantu catat kebutuhannya (jangan lempar ke email).
 
 # KONTEKS DARI KNOWLEDGE BASE
 {context}"""
@@ -93,14 +100,37 @@ async def _get_active_system_prompt(context: str) -> str:
 
 
 FALLBACK_MESSAGE = (
-    "Maaf, aku belum punya info soal itu. "
-    "Tapi Arifian pasti bisa jawab — mau aku teruskan pertanyaanmu ke dia?"
+    "Maaf, aku belum punya info soal itu. Tapi aku bisa bantu soal pengalaman, "
+    "layanan, atau project Riyanda — ada yang mau ditanya lagi?"
+)
+
+FALLBACK_MESSAGE_EN = (
+    "Sorry, I don't have info about that yet. But I can help with Riyanda's "
+    "experience, services, or projects — anything else you'd like to ask?"
 )
 
 RATE_LIMIT_MESSAGE = (
     "Maaf ya, aku lagi sedikit kewalahan nih karena banyak yang ngobrol. "
     "Coba lagi sebentar ya, sekitar 30 detik lagi."
 )
+
+RATE_LIMIT_MESSAGE_EN = (
+    "Sorry, I'm a bit overwhelmed with all the chats right now. "
+    "Try again in about 30 seconds."
+)
+
+
+def _wants_english(text: str) -> bool:
+    t = (text or "").lower()
+    return "english" in t or "inggris" in t
+
+
+def fallback_for(text: str) -> str:
+    return FALLBACK_MESSAGE_EN if _wants_english(text) else FALLBACK_MESSAGE
+
+
+def rate_limit_for(text: str) -> str:
+    return RATE_LIMIT_MESSAGE_EN if _wants_english(text) else RATE_LIMIT_MESSAGE
 
 
 # ── Build context from chunks ───────────────────────────────────────
@@ -128,7 +158,7 @@ async def generate_response(
     history: list[dict] | None = None,
 ) -> str:
     """
-    Generate a response using Groq with Elara persona.
+    Generate a response using Groq with Chevyosa persona.
 
     Includes exponential backoff retry on 429.
 
@@ -175,13 +205,13 @@ async def generate_response(
                 await asyncio.sleep(wait)
             else:
                 logger.error("Groq 429 rate limit exhausted after 3 attempts")
-                return RATE_LIMIT_MESSAGE
+                return rate_limit_for(query)
 
         except Exception as e:
             logger.error(f"Groq generation error: {e}")
-            return FALLBACK_MESSAGE
+            return fallback_for(query)
 
-    return FALLBACK_MESSAGE
+    return fallback_for(query)
 
 
 # ── SSE Streaming generation ────────────────────────────────────────
@@ -242,12 +272,12 @@ async def generate_response_stream(
                 logger.warning(f"Groq 429 (stream), retrying in {wait}s")
                 await asyncio.sleep(wait)
             else:
-                yield RATE_LIMIT_MESSAGE
+                yield rate_limit_for(query)
                 return
 
         except Exception as e:
             logger.error(f"Groq stream error: {e}")
-            yield FALLBACK_MESSAGE
+            yield fallback_for(query)
             return
 
-    yield FALLBACK_MESSAGE
+    yield fallback_for(query)

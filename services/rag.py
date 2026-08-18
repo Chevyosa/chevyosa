@@ -5,7 +5,7 @@ Full pipeline:
   1. Query Rewrite (resolve pronouns via history)
   2. Hybrid Retrieve (pgvector + FTS + RRF + threshold)
   3. Rerank (Gemma LLM-as-reranker, top-3)
-  4. Generate (Groq GPT-OSS-120B with Elara persona)
+  4. Generate (Groq GPT-OSS-120B with Chevyosa persona)
 
 Returns a structured result with mode, response, and sources.
 """
@@ -22,7 +22,7 @@ from services.rerank import rerank_chunks
 from services.generate import (
     generate_response,
     generate_response_stream,
-    FALLBACK_MESSAGE,
+    fallback_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,8 +68,8 @@ async def run_rag_pipeline(
         greeting_keywords = {
             "hai", "hi", "halo", "hello", "hey", "pagi", "selamat pagi",
             "siang", "selamat siang", "sore", "selamat sore", "malam",
-            "selamat malam", "siapa kamu", "siapa elara", "kamu siapa",
-            "elara", "apa kabar", "terima kasih", "makasih", "thanks",
+            "selamat malam", "siapa kamu", "siapa chevyosa", "kamu siapa",
+            "chevyosa", "apa kabar", "terima kasih", "makasih", "thanks",
             "thank you", "permisi", "tes", "test", "ping"
         }
         is_greeting = any(k in msg_clean for k in greeting_keywords) or len(msg_clean.split()) <= 2
@@ -88,9 +88,9 @@ async def run_rag_pipeline(
         # Explicit non-matching technical query → return fallback
         logger.info("Below similarity threshold, returning fallback")
         if stream:
-            return _fallback_stream()
+            return _fallback_stream(message)
         return RAGResult(
-            response=FALLBACK_MESSAGE,
+            response=fallback_for(message),
             rewritten_query=rewritten,
         )
 
@@ -128,6 +128,6 @@ async def run_rag_pipeline(
     )
 
 
-async def _fallback_stream() -> AsyncGenerator[str, None]:
+async def _fallback_stream(message: str) -> AsyncGenerator[str, None]:
     """Stream the fallback message character by character (instant)."""
-    yield FALLBACK_MESSAGE
+    yield fallback_for(message)

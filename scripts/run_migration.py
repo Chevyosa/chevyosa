@@ -1,6 +1,7 @@
 """
-run_migration.py — Execute migrations.sql via asyncpg (for when MCP/SQL Editor is down).
-Run with: uv run python run_migration.py
+run_migration.py — Create the RAG schema (tables + indexes) via asyncpg.
+
+Run with: uv run python scripts/run_migration.py
 """
 
 import asyncio
@@ -15,31 +16,10 @@ from config import settings
 
 
 MIGRATION_STATEMENTS = [
-    # 1. Role setup (wrapped in DO block for idempotency)
-    """
-    do $$
-    begin
-      if not exists (select from pg_roles where rolname = 'elara') then
-        create role elara with login password 'YOUR_STRONG_PASSWORD_HERE';
-      end if;
-    end
-    $$;
-    """,
-    "grant connect on database postgres to elara;",
-    "grant usage on schema public to elara;",
-    """
-    alter default privileges in schema public
-      grant select, insert, update, delete on tables to elara;
-    """,
-    """
-    alter default privileges in schema public
-      grant usage, select, update on sequences to elara;
-    """,
-
-    # 2. Extensions
+    # 1. Extensions
     "create extension if not exists vector;",
 
-    # 3. Tabel Documents
+    # 2. Tabel Documents
     """
     create table if not exists documents (
       id          uuid primary key default gen_random_uuid(),
@@ -51,7 +31,7 @@ MIGRATION_STATEMENTS = [
     );
     """,
 
-    # 4. Tabel Chunks
+    # 3. Tabel Chunks
     """
     create table if not exists chunks (
       id          uuid primary key default gen_random_uuid(),
@@ -72,7 +52,7 @@ MIGRATION_STATEMENTS = [
       on chunks using gin (to_tsvector('simple', content));
     """,
 
-    # 5. Tabel Leads
+    # 4. Tabel Leads
     """
     create table if not exists leads (
       id          uuid primary key default gen_random_uuid(),
@@ -87,7 +67,7 @@ MIGRATION_STATEMENTS = [
     );
     """,
 
-    # 6. Tabel Intake Sessions
+    # 5. Tabel Intake Sessions
     """
     create table if not exists intake_sessions (
       chat_id    text primary key,
@@ -97,7 +77,7 @@ MIGRATION_STATEMENTS = [
     );
     """,
 
-    # 7. Tabel Confessions
+    # 6. Tabel Confessions
     """
     create table if not exists confessions (
       id               uuid primary key default gen_random_uuid(),
@@ -110,7 +90,7 @@ MIGRATION_STATEMENTS = [
     );
     """,
 
-    # 8. Tabel System Prompts
+    # 7. Tabel System Prompts
     """
     create table if not exists system_prompts (
       id          uuid primary key default gen_random_uuid(),
@@ -122,7 +102,7 @@ MIGRATION_STATEMENTS = [
     );
     """,
 
-    # 9. Tabel Admin Users
+    # 8. Tabel Admin Users
     """
     create table if not exists admin_users (
       id            uuid primary key default gen_random_uuid(),
@@ -132,9 +112,15 @@ MIGRATION_STATEMENTS = [
     );
     """,
 
-    # 10. Grant tables to role elara
-    "grant select, insert, update, delete on all tables in schema public to elara;",
-    "grant usage, select, update on all sequences in schema public to elara;",
+    # 9. Tabel Rate Limits (per-IP, 24h window)
+    """
+    create table if not exists rate_limits (
+      ip            text primary key,
+      request_count int not null default 0,
+      window_start  timestamptz not null default now(),
+      updated_at    timestamptz not null default now()
+    );
+    """,
 ]
 
 
