@@ -196,14 +196,14 @@ async def deactivate_all_system_prompts(
     x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
     authorization: str | None = Header(None, alias="Authorization"),
 ):
-    """Deactivate all system prompts (falling back to default Elara prompt)."""
+    """Deactivate all system prompts (falling back to default Chevyosa prompt)."""
     verify_admin_token(x_admin_token, authorization)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute("UPDATE system_prompts SET is_active = false")
 
-    return {"status": "success", "message": "All custom system prompts deactivated. Default Elara prompt is active."}
+    return {"status": "success", "message": "All custom system prompts deactivated. Default Chevyosa prompt is active."}
 
 
 @router.delete("/{prompt_id}")

@@ -1,13 +1,9 @@
 """
-services/intake.py — Project request intake state machine (6 steps).
+services/intake.py — LLM-driven project request intake.
 
-Flow:
-  Step 1: Jenis layanan (chips)
-  Step 2: Deskripsi proyek (free text)
-  Step 3: Budget (chips)
-  Step 4: Deadline (chips)
-  Step 5: Kontak WA/Email (free text)
-  Step 6: Konfirmasi → simpan ke leads → kirim Telegram
+Natural conversation collects 5 data points (service, description, budget,
+deadline, contact). Once the required points are collected, the lead is saved
+and a Telegram notification is sent automatically.
 
 Sessions persisted to intake_sessions table (anti-kehilangan jika restart).
 Timeout: 15 menit tanpa aktivitas → session expired.
@@ -19,40 +15,12 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from config import get_pool
+from groq import AsyncGroq
+
+from config import get_pool, settings
 
 logger = logging.getLogger(__name__)
 
-
-# ── Step definitions ────────────────────────────────────────────────
-
-STEPS = {
-    1: {
-        "question": "Mau jasa apa dari Arifian? Pilih salah satu ya:",
-        "chips": ["Web App", "Skripsi/TA", "Coaching", "Desain", "Lainnya"],
-        "field": "service",
-    },
-    2: {
-        "question": "Ceritain proyeknya dong, tujuan dan fitur utamanya apa?",
-        "chips": None,
-        "field": "description",
-    },
-    3: {
-        "question": "Estimasi budget kamu sekitar berapa?",
-        "chips": ["<1jt", "1-3jt", "3-5jt", "5jt+", "Belum Tahu"],
-        "field": "budget",
-    },
-    4: {
-        "question": "Targetnya kapan kelar proyek ini?",
-        "chips": ["Buru-buru (<2 mgg)", "1 Bulan", "2-3 Bulan", "Santai"],
-        "field": "deadline",
-    },
-    5: {
-        "question": "Kontak yang bisa dihubungi (nomor WA atau email)?",
-        "chips": None,
-        "field": "contact",
-    },
-}
 
 TIMEOUT_MINUTES = 15
 
@@ -90,121 +58,6 @@ async def get_intake_session(chat_id: str) -> dict | None:
 
     data = row["data"] if isinstance(row["data"], dict) else json.loads(row["data"])
     return {"step": row["step"], "data": data}
-
-
-async def start_intake_session(chat_id: str) -> dict:
-    """Start a new intake session at step 1."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Upsert: reset if exists
-        await conn.execute(
-            """
-            INSERT INTO intake_sessions (chat_id, step, data, updated_at)
-            VALUES ($1, 1, '{}', now())
-            ON CONFLICT (chat_id) DO UPDATE
-            SET step = 1, data = '{}', updated_at = now()
-            """,
-            chat_id,
-        )
-
-    step_info = STEPS[1]
-    return {
-        "response": f"Boleh banget! Aku bantu catat kebutuhanmu ya.\n\n{step_info['question']}",
-        "step": 1,
-        "chips": step_info["chips"],
-    }
-
-
-async def process_intake_step(
-    chat_id: str,
-    message: str,
-    session: dict,
-) -> dict:
-    """
-    Process the user's answer for the current intake step.
-
-    Returns response dict with 'response', 'step', and optional 'chips'.
-    """
-    current_step = session["step"]
-    data = session["data"]
-
-    # ── Handle cancel ───────────────────────────────────────────────
-    if message.lower() in ("/cancel", "batal", "cancel"):
-        await _delete_session(chat_id)
-        return {
-            "response": "Oke, request dibatalin ya. Kalau berubah pikiran, tinggal bilang aja!",
-            "step": None,
-            "chips": None,
-        }
-
-    # ── Step 6: Confirmation ────────────────────────────────────────
-    if current_step == 6:
-        if message.lower() in ("ya", "ya, kirim", "yes", "ok", "oke", "kirim"):
-            # Save to leads table
-            lead_id = await _save_lead(data)
-            # Send Telegram notification
-            await _notify_telegram(data, lead_id)
-            # Clean up session
-            await _delete_session(chat_id)
-            return {
-                "response": (
-                    "Terima kasih! Request kamu sudah aku kirim ke Arifian.\n"
-                    "Dia akan segera menghubungi kamu lewat kontak yang kamu kasih.\n"
-                    "Ada yang lain yang bisa aku bantu?"
-                ),
-                "step": None,
-                "chips": None,
-            }
-        else:
-            # Not confirmed — ask again or cancel
-            return {
-                "response": "Klik 'Ya, Kirim' untuk konfirmasi, atau ketik 'batal' untuk membatalkan.",
-                "step": 6,
-                "chips": ["Ya, Kirim"],
-            }
-
-    # ── Steps 1-5: Collect answer ───────────────────────────────────
-    if current_step not in STEPS:
-        await _delete_session(chat_id)
-        return {
-            "response": "Session error, silakan mulai lagi dengan mengetik request kamu.",
-            "step": None,
-            "chips": None,
-        }
-
-    step_info = STEPS[current_step]
-    data[step_info["field"]] = message.strip()
-
-    next_step = current_step + 1
-
-    # ── If all 5 questions answered → show confirmation (step 6) ────
-    if next_step > 5:
-        # Save progress and show summary
-        await _update_session(chat_id, 6, data)
-
-        summary = (
-            f"Oke, ini rangkuman request kamu:\n\n"
-            f"  Layanan: {data.get('service', '-')}\n"
-            f"  Deskripsi: {data.get('description', '-')}\n"
-            f"  Budget: {data.get('budget', '-')}\n"
-            f"  Deadline: {data.get('deadline', '-')}\n"
-            f"  Kontak: {data.get('contact', '-')}\n\n"
-            f"Sudah benar? Kalau iya, aku kirim ke Arifian ya!"
-        )
-        return {
-            "response": summary,
-            "step": 6,
-            "chips": ["Ya, Kirim"],
-        }
-
-    # ── Move to next question ───────────────────────────────────────
-    await _update_session(chat_id, next_step, data)
-    next_info = STEPS[next_step]
-    return {
-        "response": next_info["question"],
-        "step": next_step,
-        "chips": next_info["chips"],
-    }
 
 
 # ── Internal helpers ────────────────────────────────────────────────
@@ -255,7 +108,7 @@ async def _save_lead(data: dict) -> str:
 
 
 async def _notify_telegram(data: dict, lead_id: str):
-    """Send lead notification to Arifian via Telegram bridge."""
+    """Send lead notification to Riyanda via Telegram bridge."""
     try:
         from services.bridge import send_telegram_message
 
@@ -272,3 +125,221 @@ async def _notify_telegram(data: dict, lead_id: str):
     except Exception as e:
         logger.error(f"Telegram notification failed: {e}")
         # Don't fail the intake — lead is already saved
+
+
+# ── LLM-driven intake (natural conversation, not rule-based) ────────
+
+INTAKE_FIELDS = ["service", "description", "budget", "deadline", "contact"]
+
+INTAKE_SYSTEM = """Kamu adalah Chevyosa, asisten virtual Riyanda Azis Febrian. Seorang pengunjung sedang ingin membuat request project.
+
+Kumpulkan informasi berikut secara natural dan ramah (JANGAN kaku seperti mengisi form):
+- service: jenis layanan (Web App, Mobile App, Skripsi/TA, Coaching, Desain, atau Lainnya)
+- description: deskripsi project (tujuan & fitur utama)
+- budget: estimasi budget
+- deadline: target selesai
+- contact: kontak WA/email
+
+Aturan:
+- Jawab dalam bahasa yang sama dengan pengunjung (default Bahasa Indonesia).
+- Obrolan tetap natural dan hangat, tapi jangan keluar jalur: tugasmu adalah melengkapi info project di atas.
+- Tanyakan SATU info yang belum lengkap per giliran, dengan bahasa natural dan hangat.
+- Kalau pengunjung bertanya balik (misalnya "jasanya apa aja?" atau "berapa harganya?"), jelaskan dengan ramah lalu lanjut kumpulkan info.
+- JANGAN menyuruh pengunjung menghubungi email/LinkedIn. Kumpulkan info sampai lengkap; sistem yang akan meneruskan request ke Riyanda.
+- Kalau semua info sudah lengkap, buat rangkuman singkat yang hangat.
+
+Info yang SUDAH terkumpul:
+{fields_text}
+
+Keluarkan HANYA JSON valid tanpa teks lain, dengan format:
+{{"response": "...", "fields": {{"service": "...", "description": "...", "budget": "...", "deadline": "...", "contact": "..."}}}}
+
+- "response": balasan natural kamu untuk pengunjung.
+- "fields": nilai field yang sudah bisa disimpulkan dari SELURUH percakapan (termasuk pesan terakhir). Isi "" untuk field yang belum diketahui. Jangan mengarang nilai."""
+
+_intake_groq_client: AsyncGroq | None = None
+
+
+def _get_intake_groq_client() -> AsyncGroq:
+    global _intake_groq_client
+    if _intake_groq_client is None:
+        _intake_groq_client = AsyncGroq(api_key=settings.groq_api_key)
+    return _intake_groq_client
+
+
+def _build_fields_text(data: dict) -> str:
+    lines = []
+    for f in INTAKE_FIELDS:
+        val = (data.get(f) or "").strip()
+        lines.append(f"- {f}: {val or '(belum)'}")
+    return "\n".join(lines)
+
+
+async def _call_intake_llm(data: dict, history: list[dict], message: str) -> dict | None:
+    """Call Groq for a natural intake response + structured field extraction."""
+    client = _get_intake_groq_client()
+    system = INTAKE_SYSTEM.format(fields_text=_build_fields_text(data))
+
+    messages = [{"role": "system", "content": system}]
+    for turn in history[-6:]:
+        messages.append({"role": turn.get("role", "user"), "content": turn.get("content", "")})
+    messages.append({"role": "user", "content": message})
+
+    try:
+        resp = await client.chat.completions.create(
+            model=settings.groq_model,
+            messages=messages,
+            temperature=0.4,
+            max_tokens=500,
+            response_format={"type": "json_object"},
+        )
+        content = resp.choices[0].message.content.strip()
+        parsed = json.loads(content)
+        return {
+            "response": (parsed.get("response") or "").strip(),
+            "fields": parsed.get("fields") or {},
+        }
+    except Exception as e:
+        logger.error("Intake LLM error: %s", e)
+        return None
+
+
+def merge_fields(data: dict, fields: dict) -> dict:
+    """Merge non-empty extracted fields into the collected data."""
+    for f in INTAKE_FIELDS:
+        val = (fields.get(f) or "").strip()
+        if val:
+            data[f] = val
+    return data
+
+
+ESSENTIAL_FIELDS = ["service", "description", "contact"]
+OPTIONAL_FIELDS = ["budget", "deadline"]
+
+
+def is_lead_ready(data: dict) -> bool:
+    """A lead is ready to auto-send when the essential fields are complete
+    plus at least one of the optional fields (budget/deadline) — i.e. 4 or 5
+    of the 5 intake points are satisfied."""
+    essential_ok = all((data.get(f) or "").strip() for f in ESSENTIAL_FIELDS)
+    optional_ok = any((data.get(f) or "").strip() for f in OPTIONAL_FIELDS)
+    return essential_ok and optional_ok
+
+
+# ── LLM-based project-request intent detection ─────────────────────
+
+INTENT_SYSTEM = (
+    "Klasifikasikan pesan pengunjung website portfolio Riyanda (Full-Stack Developer). "
+    'Jawab "yes" jika pesan menunjukkan pengunjung ingin MEMBUAT/MEMESAN project, atau SEDANG '
+    'MENJELASKAN project yang ingin dibuat — misalnya menyebut "web app untuk...", "aplikasi yang...", '
+    '"saya mau...", budget, deadline, butuh developer, minta dibuatkan, atau minta dikerjakan. '
+    'Jawab "no" HANYA jika pesan jelas-jelas: salam/basa-basi, bertanya INFO tentang Riyanda '
+    '(siapa dia, pengalaman, layanan, harga secara umum), atau bertanya "project apa saja yang '
+    'SUDAH dikerjakan". Jika ragu, jawab "yes". '
+    'Balas HANYA dengan JSON valid: {"intent": "yes"} atau {"intent": "no"}.'
+)
+
+
+async def detect_intake_intent(message: str, history: list[dict] | None = None) -> bool:
+    """Return True if the user seems to be requesting a project."""
+    history = history or []
+    client = _get_intake_groq_client()
+    messages = [{"role": "system", "content": INTENT_SYSTEM}]
+    for turn in history[-4:]:
+        messages.append({"role": turn.get("role", "user"), "content": turn.get("content", "")})
+    messages.append({"role": "user", "content": message})
+
+    try:
+        resp = await client.chat.completions.create(
+            model=settings.groq_model,
+            messages=messages,
+            temperature=0,
+            max_tokens=200,
+            response_format={"type": "json_object"},
+        )
+        content = (resp.choices[0].message.content or "").strip().lower()
+        if "yes" in content:
+            return True
+        try:
+            if (json.loads(content).get("intent") or "").strip().lower() == "yes":
+                return True
+        except Exception:
+            pass
+        # Fallback: reasoning models may leave `content` empty (answer in `reasoning`).
+        reasoning = getattr(resp.choices[0].message, "reasoning", None) or ""
+        return "yes" in reasoning.lower()
+    except Exception as e:
+        logger.error("Intent detection error: %s", e)
+        return False
+
+
+async def start_intake_llm(chat_id: str, message: str, history: list[dict] | None = None) -> dict:
+    """Start a new intake session and process the triggering message via the LLM."""
+    history = history or []
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO intake_sessions (chat_id, step, data, updated_at)
+            VALUES ($1, 1, '{}', now())
+            ON CONFLICT (chat_id) DO UPDATE
+            SET step = 1, data = '{}', updated_at = now()
+            """,
+            chat_id,
+        )
+
+    session = {"step": 1, "data": {}}
+    return await process_intake_llm(chat_id, message, session, history)
+
+
+async def process_intake_llm(
+    chat_id: str,
+    message: str,
+    session: dict,
+    history: list[dict] | None = None,
+) -> dict:
+    """Process a user message in intake mode using the LLM (natural flow).
+
+    Once the required intake points are collected, the lead is saved and the
+    Telegram notification is sent automatically (no separate confirmation step).
+    """
+    history = history or []
+    data = session.get("data", {})
+    step = session.get("step", 1)
+
+    # Cancel
+    if message.lower().strip() in ("/cancel", "batal", "cancel"):
+        await _delete_session(chat_id)
+        return {
+            "response": "Oke, request dibatalin ya. Kalau berubah pikiran, tinggal bilang aja!",
+            "step": None,
+            "chips": None,
+        }
+
+    result = await _call_intake_llm(data, history, message)
+    if result is None:
+        return {
+            "response": "Maaf, aku lagi sedikit kesulitan memproses itu. Bisa diulang atau lanjut ceritain kebutuhan project kamu?",
+            "step": step,
+            "chips": None,
+        }
+
+    merge_fields(data, result["fields"])
+
+    # Auto-send once the required points are collected
+    if is_lead_ready(data):
+        lead_id = await _save_lead(data)
+        await _notify_telegram(data, lead_id)
+        await _delete_session(chat_id)
+        return {
+            "response": (
+                "Siap! Request kamu sudah lengkap dan sudah aku kirim ke Riyanda.\n"
+                "Dia akan segera menghubungi kamu lewat kontak yang kamu kasih.\n"
+                "Ada yang lain yang bisa aku bantu?"
+            ),
+            "step": None,
+            "chips": None,
+        }
+
+    await _update_session(chat_id, 1, data)
+    return {"response": result["response"], "step": 1, "chips": None}

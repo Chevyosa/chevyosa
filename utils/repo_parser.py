@@ -41,7 +41,7 @@ async def fetch_github_repo_data(owner: str, repo: str) -> dict:
     """
     headers = {
         "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "Elara-Public-RAG",
+        "User-Agent": "Chevyosa-Public-RAG",
     }
     if settings.github_token:
         headers["Authorization"] = f"token {settings.github_token}"

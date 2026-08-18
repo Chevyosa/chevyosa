@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """All env vars consumed by Elara Public backend."""
+    """All env vars consumed by Chevyosa Public backend."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"
     groq_temperature: float = 0.3
-    groq_max_tokens: int = 1000
+    groq_max_tokens: int = 2000
 
     # ── Google AI Studio (Embedding + Reranker) ─────────────────────
     gemini_api_key: str = ""
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     r2_endpoint: str = ""
-    r2_bucket: str = "elara-chatbot"
+    r2_bucket: str = "chevyosa-chatbot"
     r2_region: str = "auto"
 
     # ── GitHub API (optional — raises rate limit to 5000/hr) ────────
@@ -58,9 +58,14 @@ class Settings(BaseSettings):
     # ── RAG tuning ──────────────────────────────────────────────────
     retrieval_top_k: int = 10
     rerank_top_k: int = 3
-    similarity_threshold: float = 0.6
+    similarity_threshold: float = 0.4
     chunk_size: int = 800
     chunk_overlap: float = 0.1
+
+    # ── Rate limiting (public /chat, per client IP) ─────────────────
+    rate_limit_enabled: bool = True
+    rate_limit_max: int = 15
+    rate_limit_window_hours: int = 24
 
 
 settings = Settings()

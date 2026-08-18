@@ -1,5 +1,5 @@
 """
-app.py — Elara Public FastAPI entry point.
+app.py — Chevyosa Public FastAPI entry point.
 
 Run with: uv run uvicorn app:app --reload
 """
@@ -39,8 +39,8 @@ async def lifespan(app: FastAPI):
 show_docs = settings.enable_docs and settings.environment.lower() != "production"
 
 app = FastAPI(
-    title="Elara Public API",
-    description="RAG chatbot + intake assistant for Arifian",
+    title="Chevyosa Public API",
+    description="RAG chatbot + intake assistant for Riyanda",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs" if show_docs else None,

@@ -26,12 +26,12 @@ async def seed_admin():
         INSERT INTO admin_users (username, password_hash)
         VALUES ('admin', $1)
         ON CONFLICT (username)
-        DO UPDATE SET password_hash = $1
+        DO NOTHING
         """,
         pwd_hash,
     )
     await conn.close()
-    print(f"[SUCCESS] Admin user seeded into DB! Username: admin (Password set from ADMIN_TOKEN)")
+    print(f"[SUCCESS] Admin user ready! Username: admin (password from ADMIN_TOKEN if newly created)")
 
 
 if __name__ == "__main__":
